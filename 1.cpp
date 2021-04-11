@@ -5,7 +5,6 @@
 #include<chrono>
 #include<map>
 #include<atomic>
-#include <fstream>
 #include <thread>
 #include <boost/interprocess/allocators/allocator.hpp>
 #include <boost/interprocess/managed_shared_memory.hpp>
@@ -21,34 +20,27 @@ using shared_map = boost::unordered_map< int, shared_string, boost::hash<int>, s
 
 class Messenger {
 private:
-    int count;
+    int* count;
     const std::string shared_memory_name = "managed_shared_memory";
     managed_shared_memory shared_memory;
     interprocess_mutex* mutex_;
     interprocess_condition* condition_;
     shared_map* map_;
     int* ID_;
-    std::fstream file;
     shared_string* line;
     std::atomic<bool> flag = false, end = false;
 public:
     Messenger() {
-        file.open("count.txt");
-        int count;
-        file >> count;
-        if (!count) {
-            shared_memory_object::remove(shared_memory_name.c_str());
-
-        }
         shared_memory = managed_shared_memory(open_or_create, shared_memory_name.c_str(), 4096);
-        count++;
-        file << count;
+
+        
+        count = shared_memory.find_or_construct<int>("Count")(0);
         mutex_ = shared_memory.find_or_construct<interprocess_mutex>("m")();
         condition_ = shared_memory.find_or_construct<interprocess_condition>("c")();
         map_ = shared_memory.find_or_construct<shared_map>("Users")(shared_memory.get_segment_manager());
         ID_ = shared_memory.find_or_construct<int>("ID")(0);
         line = shared_memory.find_or_construct<shared_string>("line")(shared_memory.get_segment_manager());
-        file.close();
+        (*count)++;
        }
     void add()
     {
@@ -74,7 +66,6 @@ public:
         }
     }
     void start() {
-        file.open("coun.txt");
         for (auto i : *map_) {
             std::cout << i.second << std::endl;
         }
@@ -87,16 +78,15 @@ public:
         th1.get();
         th2.get();
         system("pause");
-        
-        file >> count;
-        if (count == 1) {
-            std::cout << count;
-            boost::interprocess::shared_memory_object::remove(shared_memory_name.c_str());
-        }
-        count--;
-        file << count;
-        file.close();
+
     }
+    ~Messenger() {
+
+       if (*count == 1) {
+              boost::interprocess::shared_memory_object::remove(shared_memory_name.c_str());
+          }
+          count--;
+      }
 };
 
 int main() {
