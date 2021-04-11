@@ -4,6 +4,12 @@
 #include <future>
 #include<chrono>
 #include<map>
+#define BOOST_DATE_TIME_NO_LIB
+#include<iostream>
+#include<string>
+#include <future>
+#include<chrono>
+#include<map>
 #include <fstream>
 #include <thread>
 #include <boost/interprocess/allocators/allocator.hpp>
@@ -12,41 +18,29 @@
 #include <boost/interprocess/sync/interprocess_condition.hpp>
 #include <boost/interprocess/containers/map.hpp>
 #include <boost/interprocess/containers/string.hpp>
+
 using namespace boost::interprocess;
-//using allocator_str = allocator < char,
-//    managed_shared_memory::segment_manager >;
-//using b_string = basic_string <char, std::char_traits<char>, allocator_str>;
-////std::allocator < std::pair<const int, std::string>> allocator_map;
-//
-////using allocator_map = allocator<boost::interprocess::map<int, std::string>, managed_shared_memory::segment_manager>;
-////using b_map = boost::interprocess::map <int, std::string, allocator_map>;
+using char_allocator = allocator<char, managed_shared_memory::segment_manager>;
+using shared_string = basic_string<char, std::char_traits<char>, char_allocator>;
+using pair_allocator = allocator < std::pair< int, shared_string>, managed_shared_memory::segment_manager >;
+using shared_map = boost::unordered_map< int, shared_string, boost::hash<int>, std::equal_to<int>, pair_allocator>;
 
-using CharAllocator = allocator<char, managed_shared_memory::segment_manager>;
-using B_String = basic_string<char, std::char_traits<char>, CharAllocator>;
-using StringAllocator = allocator<B_String, managed_shared_memory::segment_manager>;
 
-typedef int    KeyType;
-typedef B_String MappedType;
-typedef std::pair<const int, MappedType> ValueType;
 
-using MapAllocator = allocator<ValueType, managed_shared_memory::segment_manager>; // ни один конструктор не подходит
-
-using MyMap = map<KeyType, MappedType, std::less<KeyType>, MapAllocator>;
-
-void add(MyMap* map_, int* ID, interprocess_mutex* mutex_, interprocess_condition* condition_, std::atomic<bool>* flag, std::atomic<bool>* end)
+void add(managed_shared_memory shared_memory, shared_map* map_, int* ID, interprocess_mutex* mutex_, interprocess_condition* condition_, std::atomic<bool>* flag, std::atomic<bool>* end)
 {
-    std::string in;
+    auto line = shared_memory.find_or_construct<shared_string>("line")(shared_memory.get_segment_manager());
     do {
-        getline(std::cin, in);
+        getline(std::cin, *line);
         std::scoped_lock lock(*mutex_);
-        map_->emplace(*ID,in);
+        map_->emplace(*ID, *line);
         *(ID)++;
         *flag = true;
         condition_->notify_all();
     }     while (!std::cin);
     *end = true;
 }
-void out(MyMap* map_, int* ID, interprocess_mutex* mutex_, interprocess_condition* condition_, std::atomic<bool>* flag, std::atomic<bool>* end)
+void out(shared_map* map_, int* ID, interprocess_mutex* mutex_, interprocess_condition* condition_, std::atomic<bool>* flag, std::atomic<bool>* end)
 {
     while (!end->load()) {
         std::unique_lock lock(*mutex_);
@@ -75,13 +69,13 @@ int main() {
     fout.close();
     auto mutex_ = shared_memory.find_or_construct<interprocess_mutex>("m")();
     auto condition_ = shared_memory.find_or_construct<interprocess_condition>("c")();
-    auto map_ = shared_memory.find_or_construct<MyMap>("map")(shared_memory.get_segment_manager());
+    auto map_ = shared_memory.find_or_construct<shared_map>("Users")(shared_memory.get_segment_manager());
     auto ID_ = shared_memory.find_or_construct<int>("ID")(0);
     for (auto i : *map_) {
         std::cout << i.second << std::endl;
     }
     std::atomic<bool> flag = false, end = false;
-    std::future<void> th1 = std::async(add, map_, ID_, mutex_, condition_, &flag, &end);
+    std::future<void> th1 = std::async(add, shared_memory, map_, ID_, mutex_, condition_, &flag, &end);
     std::future<void> th2 = std::async(out, map_, ID_, mutex_, condition_, &flag, &end);
     using namespace std::chrono_literals;
     while (!end.load()) {
