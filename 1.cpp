@@ -14,9 +14,10 @@
 #include <boost/interprocess/containers/string.hpp>
 using namespace boost::interprocess;
 using char_allocator = allocator<char, managed_shared_memory::segment_manager>;
-using shared_string = basic_string<char, std::char_traits<char>, char_allocator>;
-using pair_allocator = allocator < std::pair< int, shared_string>, managed_shared_memory::segment_manager >;
-using shared_map = boost::unordered_map< int, shared_string, boost::hash<int>, std::equal_to<int>, pair_allocator>;
+using shared_string = boost::interprocess::basic_string<char, std::char_traits<char>, char_allocator>;
+using pair_str_allocator = allocator < std::pair< std::string, shared_string>, managed_shared_memory::segment_manager >;
+using pair_allocator = allocator < std::pair<int, std::pair< std::string, shared_string>>, managed_shared_memory::segment_manager >;
+using shared_map = boost::unordered_map< int, std::pair< std::string, shared_string>, boost::hash<int>, std::equal_to<int>, pair_allocator>;
 
 class Messenger {
 private:
@@ -29,11 +30,14 @@ private:
     int* ID_;
     shared_string* line;
     std::atomic<bool> flag = false, end = false;
+    std::string personal_name;
+    shared_string* current_name;
 public:
     Messenger() {
+        std::cout << "Please, enter your name to join the chat: ";
+        getline(std::cin, personal_name);
+        std::cout << "\nWelcome to chat! If you want to leave write \"Bye\"" << std::endl;
         shared_memory = managed_shared_memory(open_or_create, shared_memory_name.c_str(), 4096);
-
-        
         count = shared_memory.find_or_construct<int>("Count")(0);
         mutex_ = shared_memory.find_or_construct<interprocess_mutex>("m")();
         condition_ = shared_memory.find_or_construct<interprocess_condition>("c")();
@@ -47,11 +51,11 @@ public:
         do {
             getline(std::cin, *line);
             std::scoped_lock lock(*mutex_);
-            map_->emplace(*ID_, *line);
+            map_->emplace(*ID_, std::make_pair(personal_name,*line));
             (*ID_)++;
             flag = true;
             condition_->notify_all();
-        } while (*line != "0");
+        } while (*line != "Bye");
           end = true;
     }
     void out()
@@ -60,14 +64,14 @@ public:
             std::unique_lock lock(*mutex_);
             condition_->wait(lock);
             if (!flag.load()) {
-                std::cout << (map_->find((*ID_)-1))->second << std::endl;
+                std::cout << "[" << map_->find(((*ID_) - 1))->second.first<<"]: " << (map_->find((*ID_) - 1))->second.second << std::endl;
             }
             flag = false;
         }
     }
     void start() {
         for (auto i : *map_) {
-            std::cout << i.second << std::endl;
+            std::cout << "[" << i.second.first << "]: " << i.second.second << std::endl;
         }
         std::future<void> th1 = std::async(&Messenger::add, this);
         std::future<void> th2 = std::async(&Messenger::out, this);
@@ -83,15 +87,17 @@ public:
     ~Messenger() {
 
        if (*count == 1) {
-              boost::interprocess::shared_memory_object::remove(shared_memory_name.c_str());
+             shared_memory_object::remove(shared_memory_name.c_str());
           }
           count--;
       }
+    //friend static bool shared_memory_object::remove(const char* filename);
 };
 
 int main() {
     Messenger m;
     m.start();
+    shared_memory_object::remove("managed_shared_memory");
     return EXIT_SUCCESS;
     
 }
